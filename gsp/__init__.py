@@ -19,34 +19,24 @@ Gst.init(None)
 _LOGGER = logging.getLogger(__name__)
 _FORMAT_TIME = Gst.Format(Gst.Format.TIME)
 _NANOSEC_MULT = 10 ** 9
-_MAX_UPDATE_QUEUE_SIZE = 100
-_WAIT = 1
 
 STATE_IDLE = 'idle'
 STATE_PLAYING = 'playing'
 STATE_PAUSED = 'paused'
-UPDATE_STATE = 'state'
-UPDATE_VOLUME = 'volume'
-UPDATE_POSITION = 'position'
-UPDATE_DURATION = 'duration'
-UPDATE_TITLE = 'title'
-UPDATE_ARTIST = 'artist'
-UPDATE_ALBUM = 'album'
-UPDATE_URI = 'uri'
 TASK_PLAY = 'play'
 TASK_PAUSE = 'pause'
 TASK_STOP = 'stop'
 TASK_MEDIA = 'media'
-TASK_GET_STATE = 'get_state'
-TASK_GET_DURATION = 'get_duration'
-TASK_GET_POSITION = 'get_position'
-TASK_GET_URI = 'get_uri'
-TASK_GET_TITLE = 'get_title'
-TASK_GET_ARTIST = 'get_artist'
-TASK_GET_ALBUM = 'get_album'
-TASK_GET_VOLUME = 'get_volume'
 TASK_SET_POSITION = 'set_position'
 TASK_SET_VOLUME = 'set_volume'
+ATTR_STATE = 'state'
+ATTR_VOLUME = 'volume'
+ATTR_POSITION = 'position'
+ATTR_DURATION = 'duration'
+ATTR_URI = 'uri'
+ATTR_ARTIST = 'artist'
+ATTR_ALBUM = 'album'
+ATTR_TITLE = 'title'
 PROP_VOLUME = 'volume'
 PROP_URI = 'uri'
 PROP_CURRENT_URI = 'current-uri'
@@ -64,13 +54,13 @@ class GstreamerProcess(multiprocessing.Process):
     threads don't play nice with GLib.
     """
 
-    def __init__(self, task_queue, update_queue, media_queue, pipeline_string):
+    def __init__(self, manager, task_queue, media_queue, pipeline_string):
         """Initialize process."""
         super(GstreamerProcess, self).__init__()
         self._state = None
         self._tags = {}
+        self._manager = manager
         self._task_queue = task_queue
-        self._update_queue = update_queue
         self._media_queue = media_queue
         self.state = STATE_IDLE
         self._player = Gst.ElementFactory.make('playbin', 'player')
@@ -91,6 +81,7 @@ class GstreamerProcess(multiprocessing.Process):
         while True:
             if context.pending():
                 context.iteration()
+                self._manager[ATTR_POSITION] = self._position()
             try:
                 method, args = self._task_queue.get(False)
                 getattr(self, method)(**args)
@@ -111,6 +102,13 @@ class GstreamerProcess(multiprocessing.Process):
             metadata = mutagen.File(local_path, easy=True)
             if metadata.tags:
                 self._tags = metadata.tags
+            title = self._tags.get(TAG_TITLE, [])
+            self._manager[ATTR_TITLE] = title[0] if len(title) else ''
+            artist = self._tags.get(TAG_ARTIST, [])
+            self._manager[ATTR_ARTIST] = artist[0] if len(artist) else ''
+            album = self._tags.get(TAG_ALBUM, [])
+            self._manager[ATTR_ALBUM] = album[0] if len(album) else ''
+
         # urllib.error.HTTPError
         except Exception:  # pylint: disable=broad-except
             local_path = uri
@@ -118,6 +116,9 @@ class GstreamerProcess(multiprocessing.Process):
         self._player.set_property(PROP_URI, 'file://{}'.format(local_path))
         self._player.set_state(Gst.State.PLAYING)
         self.state = STATE_PLAYING
+        self._manager[ATTR_URI] = uri
+        self._manager[ATTR_DURATION] = self._duration()
+        self._manager[ATTR_VOLUME] = self._player.get_property(PROP_VOLUME)
         _LOGGER.info('playing %s', uri)
 
     def play(self):
@@ -139,53 +140,18 @@ class GstreamerProcess(multiprocessing.Process):
         self.state = STATE_IDLE
         self._tags = {}
 
-    def get_uri(self):
-        """Get URI."""
-        uri = self._player.get_property(PROP_CURRENT_URI)
-        self._update(UPDATE_URI, uri)
-
-    def get_title(self):
-        """Get media title."""
-        title = self._tags.get(TAG_TITLE, [])
-        self._update(UPDATE_TITLE, title[0] if len(title) else '')
-
-    def get_artist(self):
-        """Get media artist."""
-        artist = self._tags.get(TAG_ARTIST, [])
-        self._update(UPDATE_ARTIST, artist[0] if len(artist) else '')
-
-    def get_album(self):
-        """Get media album."""
-        album = self._tags.get(TAG_ALBUM, [])
-        self._update(UPDATE_ALBUM, album[0] if len(album) else '')
-
-    def get_state(self):
-        """Get player state."""
-        self._update(UPDATE_STATE, self.state)
-
-    def get_duration(self):
-        """Get media duration."""
-        self._update(UPDATE_DURATION, self._duration())
-
-    def get_volume(self):
-        """Get volume."""
-        volume = self._player.get_property(PROP_VOLUME)
-        self._update(UPDATE_VOLUME, volume)
-
-    def get_position(self):
-        """Get media position."""
-        self._update(UPDATE_POSITION, self._position())
-
     def set_position(self, position):
         """Set media position."""
         if position > self._duration():
             return
         position_ns = position * _NANOSEC_MULT
+        self._manager[ATTR_POSITION] = position
         self._player.seek_simple(_FORMAT_TIME, Gst.SeekFlags.FLUSH, position_ns)
 
     def set_volume(self, volume):
         """Set volume."""
         self._player.set_property(PROP_VOLUME, volume)
+        self._manager[ATTR_VOLUME] = volume
         _LOGGER.info('volume set to %.2f', volume)
 
     @property
@@ -197,7 +163,7 @@ class GstreamerProcess(multiprocessing.Process):
     def state(self, state):
         """Set state."""
         self._state = state
-        self._update(UPDATE_STATE, state)
+        self._manager[ATTR_STATE] = state
         _LOGGER.info('state changed to %s', state)
 
     def _duration(self):
@@ -216,10 +182,6 @@ class GstreamerProcess(multiprocessing.Process):
             position = resp[1] // _NANOSEC_MULT
         return position
 
-    def _update(self, key, value):
-        """Push an update to the queue."""
-        self._update_queue.put((key, value, time.time()))
-
     def _on_message(self, bus, message):  # pylint: disable=unused-argument
         """When a message is received from Gstreamer."""
         if message.type == Gst.MessageType.EOS:
@@ -233,36 +195,43 @@ class GstreamerProcess(multiprocessing.Process):
 class GstreamerPlayer(object):
     """Gstreamer wrapper.
 
-    Simple interface to queue-based communication of process.
+    Simple interface with inter-process communication.
     """
 
     def __init__(self, pipeline_string):
         """Initialize player wrapper."""
+        self._manager = multiprocessing.Manager().dict({
+            ATTR_STATE: STATE_IDLE,
+            ATTR_DURATION: None,
+            ATTR_POSITION: None,
+            ATTR_VOLUME: None,
+            ATTR_ARTIST: None,
+            ATTR_ALBUM: None,
+            ATTR_TITLE: None,
+            ATTR_URI: None
+        })
         self._task_queue = multiprocessing.Queue()
-        self._update_queue = multiprocessing.Queue()
         self._media_queue = multiprocessing.Queue()
         _LOGGER.info('starting gstreamer')
-        self._tags = None
-        self._player = GstreamerProcess(self._task_queue, self._update_queue,
+        self._player = GstreamerProcess(self._manager, self._task_queue,
                                         self._media_queue, pipeline_string)
         self._player.start()
 
     def queue(self, uri):
         """Queue media."""
         self._media_queue.put(uri)
-        return self._getter(TASK_GET_STATE, UPDATE_STATE)
 
     def pause(self):
         """Pause player."""
-        return self._getter(TASK_PAUSE, UPDATE_STATE)
+        self._queue_task(TASK_PAUSE)
 
     def play(self):
         """Play player."""
-        return self._getter(TASK_PLAY, UPDATE_STATE)
+        self._queue_task(TASK_PLAY)
 
     def stop(self):
         """Stop player."""
-        return self._getter(TASK_STOP, UPDATE_STATE)
+        self._queue_task(TASK_STOP)
 
     def mute(self):
         """Mute."""
@@ -280,42 +249,42 @@ class GstreamerPlayer(object):
     @property
     def title(self):
         """Get title tag."""
-        return self._getter(TASK_GET_TITLE, UPDATE_TITLE)
+        return self._manager[ATTR_TITLE]
 
     @property
     def artist(self):
         """Get artist tag."""
-        return self._getter(TASK_GET_ARTIST, UPDATE_ARTIST)
+        return self._manager[ATTR_ARTIST]
 
     @property
     def album(self):
         """Get album tag."""
-        return self._getter(TASK_GET_ALBUM, UPDATE_ALBUM)
+        return self._manager[ATTR_ALBUM]
 
     @property
     def state(self):
         """Get state."""
-        return self._getter(TASK_GET_STATE, UPDATE_STATE)
+        return self._manager[ATTR_STATE]
 
     @property
     def duration(self):
         """Get duration."""
-        return self._getter(TASK_GET_DURATION, UPDATE_DURATION)
+        return self._manager[ATTR_DURATION]
 
     @property
     def position(self):
         """Get position."""
-        return self._getter(TASK_GET_POSITION, UPDATE_POSITION)
+        return self._manager[ATTR_POSITION]
 
     @property
     def uri(self):
         """Get URI."""
-        return self._getter(TASK_GET_URI, UPDATE_URI)
+        return self._manager[ATTR_URI]
 
     @property
     def volume(self):
         """Get volume."""
-        return self._getter(TASK_GET_VOLUME, UPDATE_VOLUME)
+        return self._manager[ATTR_VOLUME]
 
     @volume.setter
     def volume(self, volume):
@@ -330,22 +299,3 @@ class GstreamerPlayer(object):
     def _queue_task(self, name, **kwargs):
         """Queue a task."""
         self._task_queue.put((name, kwargs))
-
-    def _getter(self, task, update):
-        """Get a property via queues."""
-        queued_ts = time.time()
-        # Put task in queue.
-        self._queue_task(task)
-        # Wait for update response.
-        size = 0
-        while time.time() < queued_ts + _WAIT:
-            try:
-                key, value, update_ts = self._update_queue.get(False)
-                if key == update and update_ts >= queued_ts:
-                    return value
-                elif size <= _MAX_UPDATE_QUEUE_SIZE:
-                    self._update_queue.put((key, value, update_ts))
-                    size += 1
-            except queue.Empty:
-                pass
-        _LOGGER.error('did not receive %s update', update)
