@@ -76,6 +76,8 @@ class GstreamerProcess(multiprocessing.Process):
 
         Iterate the GLib main loop and process the task queue.
         """
+        pass
+        """
         loop = GLib.MainLoop()
         context = loop.get_context()
         while True:
@@ -94,6 +96,7 @@ class GstreamerProcess(multiprocessing.Process):
                 self.media(uri)
             except queue.Empty:
                 pass
+        """
 
     def media(self, uri):
         """Play a media file."""
