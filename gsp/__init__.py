@@ -108,18 +108,20 @@ class GstreamerProcess(multiprocessing.Process):
             self._manager[ATTR_ARTIST] = artist[0] if len(artist) else ''
             album = self._tags.get(TAG_ALBUM, [])
             self._manager[ATTR_ALBUM] = album[0] if len(album) else ''
+            
+            local_uri = 'file://{}'.format(local_path)
 
         # urllib.error.HTTPError
         except Exception:  # pylint: disable=broad-except
-            local_path = uri
+            local_uri = uri
         self._player.set_state(Gst.State.NULL)
-        self._player.set_property(PROP_URI, 'file://{}'.format(local_path))
+        self._player.set_property(PROP_URI, local_uri)
         self._player.set_state(Gst.State.PLAYING)
         self.state = STATE_PLAYING
         self._manager[ATTR_URI] = uri
         self._manager[ATTR_DURATION] = self._duration()
         self._manager[ATTR_VOLUME] = self._player.get_property(PROP_VOLUME)
-        _LOGGER.info('playing %s', uri)
+        _LOGGER.info('playing %s (as %s)', uri, local_uri)
 
     def play(self):
         """Change state to playing."""
