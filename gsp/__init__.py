@@ -79,6 +79,7 @@ class GstreamerProcess(multiprocessing.Process):
         loop = GLib.MainLoop()
         context = loop.get_context()
         while True:
+            time.sleep(0.1)
             if context.pending():
                 context.iteration()
                 self._manager[ATTR_POSITION] = self._position()
