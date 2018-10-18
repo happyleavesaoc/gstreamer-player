@@ -76,8 +76,6 @@ class GstreamerProcess(multiprocessing.Process):
 
         Iterate the GLib main loop and process the task queue.
         """
-        pass
-        """
         loop = GLib.MainLoop()
         context = loop.get_context()
         while True:
@@ -97,7 +95,6 @@ class GstreamerProcess(multiprocessing.Process):
                 self.media(uri)
             except queue.Empty:
                 pass
-        """
 
     def media(self, uri):
         """Play a media file."""
@@ -112,7 +109,6 @@ class GstreamerProcess(multiprocessing.Process):
             self._manager[ATTR_ARTIST] = artist[0] if len(artist) else ''
             album = self._tags.get(TAG_ALBUM, [])
             self._manager[ATTR_ALBUM] = album[0] if len(album) else ''
-            
             local_uri = 'file://{}'.format(local_path)
 
         # urllib.error.HTTPError

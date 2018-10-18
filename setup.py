@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='gstreamer-player',
-    version='1.1.1',
+    version='1.1.2',
     description='Python 3 wrapper for playing media via gstreamer',
     url='https://github.com/happyleavesaoc/gstreamer-player/',
     license='MIT',
