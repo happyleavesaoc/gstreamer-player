@@ -11,7 +11,6 @@ import urllib.request
 import gi  # pylint: disable=import-error
 gi.require_version('Gst', '1.0')
 from gi.repository import GLib, Gst  # pylint: disable=import-error,wrong-import-position
-import mutagen  # pylint: disable=wrong-import-position
 
 
 Gst.init(None)
@@ -98,22 +97,11 @@ class GstreamerProcess(multiprocessing.Process):
 
     def media(self, uri):
         """Play a media file."""
-        try:
-            local_path, _ = urllib.request.urlretrieve(uri)
-            metadata = mutagen.File(local_path, easy=True)
-            if metadata.tags:
-                self._tags = metadata.tags
-            title = self._tags.get(TAG_TITLE, [])
-            self._manager[ATTR_TITLE] = title[0] if len(title) else ''
-            artist = self._tags.get(TAG_ARTIST, [])
-            self._manager[ATTR_ARTIST] = artist[0] if len(artist) else ''
-            album = self._tags.get(TAG_ALBUM, [])
-            self._manager[ATTR_ALBUM] = album[0] if len(album) else ''
-            local_uri = 'file://{}'.format(local_path)
-
-        # urllib.error.HTTPError
-        except Exception:  # pylint: disable=broad-except
+        if uri.startswith("/"):
+            local_uri = 'file://{}'.format(uri)
+        else:
             local_uri = uri
+            
         self._player.set_state(Gst.State.NULL)
         self._player.set_property(PROP_URI, local_uri)
         self._player.set_state(Gst.State.PLAYING)
@@ -186,6 +174,12 @@ class GstreamerProcess(multiprocessing.Process):
 
     def _on_message(self, bus, message):  # pylint: disable=unused-argument
         """When a message is received from Gstreamer."""
+        if message.type == Gst.MessageType.TAG:
+            taglist = message.parse_tag()
+            for n in range(taglist.n_tags()):
+                tag = taglist.nth_tag_name(n)
+                if taglist.get_string(tag)[0]:
+                    self._manager[tag] = taglist.get_string(tag)[1]
         if message.type == Gst.MessageType.EOS:
             self.stop()
         elif message.type == Gst.MessageType.ERROR:
